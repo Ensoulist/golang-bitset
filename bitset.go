@@ -8,29 +8,29 @@ import (
 var unit_bit_len = int64(64)
 
 type BitSet struct {
-	set map[int64]int64
+	set map[int64]uint64
 }
 
-func NewBitSet(content map[int64]int64) *BitSet {
+func NewBitSet(content map[int64]uint64) *BitSet {
 	if content == nil {
-		content = map[int64]int64{}
+		content = map[int64]uint64{}
 	}
 	return &BitSet{set: content}
 }
 
-func (b *BitSet) From(context map[int64]int64) {
+func (b *BitSet) From(context map[int64]uint64) {
 	b.set = context
 }
 
 func (b *BitSet) Clone() *BitSet {
-	newSet := make(map[int64]int64, len(b.set))
+	newSet := make(map[int64]uint64, len(b.set))
 	for k, v := range b.set {
 		newSet[k] = v
 	}
 	return NewBitSet(newSet)
 }
 
-func (b *BitSet) Storage() map[int64]int64 {
+func (b *BitSet) Storage() map[int64]uint64 {
 	return b.set
 }
 
@@ -43,7 +43,7 @@ func (b *BitSet) Test(key int64) bool {
 	return (val & (1 << innerIdx)) != 0
 }
 
-func (b *BitSet) Set(key int64) (int64, int64) {
+func (b *BitSet) Set(key int64) (int64, uint64) {
 	outIdx, innerIdx := key_2_idx(key)
 	val := b.set[outIdx]
 	val |= (1 << innerIdx)
@@ -51,7 +51,7 @@ func (b *BitSet) Set(key int64) (int64, int64) {
 	return outIdx, val
 }
 
-func (b *BitSet) Clear(key int64) (int64, int64) {
+func (b *BitSet) Clear(key int64) (int64, uint64) {
 	outIdx, innerIdx := key_2_idx(key)
 	val := b.set[outIdx]
 	if val == 0 {
@@ -67,17 +67,21 @@ func (b *BitSet) Clear(key int64) (int64, int64) {
 	return outIdx, val
 }
 
-func (b *BitSet) Flip(key int64) (int64, int64) {
+func (b *BitSet) Flip(key int64) (int64, uint64) {
 	outIdx, innerIdx := key_2_idx(key)
 	val := b.set[outIdx]
-	val |= (1 << innerIdx)
+	raw := (val & (1 << innerIdx)) != 0
+	if raw {
+		val &= ^(1 << innerIdx)
+	} else {
+		val |= (1 << innerIdx)
+	}
 	if val == 0 {
 		delete(b.set, outIdx)
-		return outIdx, 0
 	} else {
 		b.set[outIdx] = val
-		return outIdx, val
 	}
+	return outIdx, val
 }
 
 func (b *BitSet) Count() int {
@@ -214,11 +218,19 @@ func (b *BitSet) Union(other *BitSet, inplace ...bool) *BitSet {
 func (b *BitSet) Iterate(do func(int64) bool) {
 	for outIdx, v := range b.set {
 		for {
-			innerIdx := bits.TrailingZeros64(uint64(v))
+			innerIdx := bits.TrailingZeros64(v)
 			if innerIdx == 64 {
 				break
 			}
-			if !do(int64(outIdx)*unit_bit_len + int64(innerIdx)) {
+
+			useInner := int64(innerIdx)
+			useOuter := outIdx
+			if outIdx < 0 {
+				useOuter = outIdx + 1
+				useInner = -int64(innerIdx)
+			}
+
+			if !do(useOuter*unit_bit_len + useInner) {
 				break
 			}
 			v = v & ^(1 << innerIdx)
@@ -238,11 +250,9 @@ func (b *BitSet) String() string {
 
 func key_2_idx(key int64) (outer int64, inner int) {
 	outer, inner = key/unit_bit_len, int(key%unit_bit_len)
-	// if key < 0 {
-	// 	outer = outer - 1
-	// }
-	// if inner < 0 {
-	// 	inner = -inner
-	// }
+	if key < 0 {
+		outer = outer - 1
+		inner = -inner
+	}
 	return
 }
