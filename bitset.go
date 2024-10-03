@@ -118,8 +118,13 @@ func (b *BitSet) Intersection(other *BitSet, inplace ...bool) *BitSet {
 	for k, v := range b.set {
 		if otherV, ok := otherMap[k]; ok {
 			newV := v & otherV
-			if newV > 0 {
+			if newV != 0 {
 				rlt.set[k] = newV
+			} else if isInplace {
+				if deleteKeys == nil {
+					deleteKeys = make([]int64, 0, 1)
+				}
+				deleteKeys = append(deleteKeys, k)
 			}
 		} else if isInplace {
 			if deleteKeys == nil {
@@ -132,6 +137,44 @@ func (b *BitSet) Intersection(other *BitSet, inplace ...bool) *BitSet {
 	if isInplace && deleteKeys != nil {
 		for _, k := range deleteKeys {
 			delete(rlt.set, k)
+		}
+	}
+	return rlt
+}
+
+func (b *BitSet) RemoveIntersection(other *BitSet, inplace ...bool) *BitSet {
+	isInplace := false
+	if len(inplace) > 0 {
+		isInplace = inplace[0]
+	}
+
+	var rlt *BitSet
+	if isInplace {
+		rlt = b
+	} else {
+		rlt = NewBitSet(nil)
+	}
+
+	inter := b.Intersection(other)
+	var deleteKeys []int64
+	for k, v := range b.set {
+		if interV, ok := inter.set[k]; ok {
+			newVal := v &^ interV
+			rlt.set[k] = newVal
+			if newVal == 0 && isInplace {
+				if deleteKeys == nil {
+					deleteKeys = make([]int64, 0, 1)
+				}
+				deleteKeys = append(deleteKeys, k)
+			}
+		} else if !isInplace {
+			rlt.set[k] = v
+		}
+	}
+
+	if isInplace && deleteKeys != nil {
+		for _, k := range deleteKeys {
+			delete(b.set, k)
 		}
 	}
 	return rlt
@@ -153,7 +196,7 @@ func (b *BitSet) Union(other *BitSet, inplace ...bool) *BitSet {
 	otherMap := other.set
 	for k, v := range b.set {
 		otherV := otherMap[k]
-		if otherV > 0 {
+		if otherV != 0 {
 			rlt.set[k] = v | otherV
 		} else {
 			rlt.set[k] = v
@@ -193,6 +236,13 @@ func (b *BitSet) String() string {
 	return fmt.Sprintf("Raw Map: %s => nums: %v", setStr, nums)
 }
 
-func key_2_idx(key int64) (int64, int) {
-	return key / unit_bit_len, int(key % unit_bit_len)
+func key_2_idx(key int64) (outer int64, inner int) {
+	outer, inner = key/unit_bit_len, int(key%unit_bit_len)
+	// if key < 0 {
+	// 	outer = outer - 1
+	// }
+	// if inner < 0 {
+	// 	inner = -inner
+	// }
+	return
 }
