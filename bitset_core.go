@@ -8,35 +8,36 @@ import (
 var unit_bit_len = int64(64)
 
 type BitSet struct {
-	set map[int64]uint64
+	set IDataSource
 }
 
-func NewBitSet(content map[int64]uint64) *BitSet {
-	if content == nil {
-		content = map[int64]uint64{}
+func NewBitSetFromSource(source IDataSource) *BitSet {
+	if source == nil {
+		panic("NewBitSetFromSource source is nil")
 	}
-	return &BitSet{set: content}
+	return &BitSet{set: source}
 }
 
-func (b *BitSet) From(context map[int64]uint64) {
-	b.set = context
+func (b *BitSet) From(source IDataSource) {
+	b.set = source
 }
 
 func (b *BitSet) Clone() *BitSet {
-	newSet := make(map[int64]uint64, len(b.set))
-	for k, v := range b.set {
-		newSet[k] = v
+	iteratable, ok := b.set.(IDataIteratable)
+	if !ok {
+		panic("BitSet set is not IDataIteratable")
 	}
-	return NewBitSet(newSet)
+	newSource := iteratable.Clone()
+	return NewBitSetFromSource(newSource)
 }
 
-func (b *BitSet) Storage() map[int64]uint64 {
+func (b *BitSet) Storage() IDataSource {
 	return b.set
 }
 
 func (b *BitSet) Test(key int64) bool {
 	outIdx, innerIdx := key_2_idx(key)
-	val := b.set[outIdx]
+	val, _ := b.set.Get(outIdx)
 	if val == 0 {
 		return false
 	}
@@ -45,31 +46,31 @@ func (b *BitSet) Test(key int64) bool {
 
 func (b *BitSet) Set(key int64) (int64, uint64) {
 	outIdx, innerIdx := key_2_idx(key)
-	val := b.set[outIdx]
+	val, _ := b.set.Get(outIdx)
 	val |= (1 << innerIdx)
-	b.set[outIdx] = val
+	b.set.Set(outIdx, val)
 	return outIdx, val
 }
 
 func (b *BitSet) Clear(key int64) (int64, uint64) {
 	outIdx, innerIdx := key_2_idx(key)
-	val := b.set[outIdx]
+	val, _ := b.set.Get(outIdx)
 	if val == 0 {
 		return outIdx, val
 	}
 
 	val &= ^(1 << innerIdx)
 	if val == 0 {
-		delete(b.set, outIdx)
+		b.set.Delete(outIdx)
 	} else {
-		b.set[outIdx] = val
+		b.set.Set(outIdx, val)
 	}
 	return outIdx, val
 }
 
 func (b *BitSet) Flip(key int64) (int64, uint64) {
 	outIdx, innerIdx := key_2_idx(key)
-	val := b.set[outIdx]
+	val, _ := b.set.Get(outIdx)
 	raw := (val & (1 << innerIdx)) != 0
 	if raw {
 		val &= ^(1 << innerIdx)
@@ -77,23 +78,28 @@ func (b *BitSet) Flip(key int64) (int64, uint64) {
 		val |= (1 << innerIdx)
 	}
 	if val == 0 {
-		delete(b.set, outIdx)
+		b.set.Delete(outIdx)
 	} else {
-		b.set[outIdx] = val
+		b.set.Set(outIdx, val)
 	}
 	return outIdx, val
 }
 
 func (b *BitSet) Count() int {
-	count := 0
-	for _, v := range b.set {
-		count += bits.OnesCount64(uint64(v))
+	iteratable, ok := b.set.(IDataIteratable)
+	if !ok {
+		panic("BitSet set is not IDataIteratable")
 	}
+	count := 0
+	iteratable.Iterate(func(_ int64, v uint64) bool {
+		count += bits.OnesCount64(v)
+		return true
+	})
 	return count
 }
 
 func (b *BitSet) Len() int {
-	return len(b.set)
+	return b.set.Len()
 }
 
 func (b *BitSet) Any() bool {
@@ -101,7 +107,7 @@ func (b *BitSet) Any() bool {
 }
 
 func (b *BitSet) None() bool {
-	return len(b.set) == 0
+	return b.set.Len() == 0
 }
 
 func (b *BitSet) Intersection(other *BitSet, inplace ...bool) *BitSet {
@@ -110,20 +116,25 @@ func (b *BitSet) Intersection(other *BitSet, inplace ...bool) *BitSet {
 		isInplace = inplace[0]
 	}
 
+	iteratable, ok := b.set.(IDataIteratable)
+	if !ok {
+		panic("BitSet set is not IDataIteratable")
+	}
+
 	var rlt *BitSet
 	if isInplace {
 		rlt = b
 	} else {
-		rlt = NewBitSet(nil)
+		rlt = NewBitSetFromSource(iteratable.New())
 	}
 
 	otherMap := other.set
 	var deleteKeys []int64
-	for k, v := range b.set {
-		if otherV, ok := otherMap[k]; ok {
+	iteratable.Iterate(func(k int64, v uint64) bool {
+		if otherV, ok := otherMap.Get(k); ok {
 			newV := v & otherV
 			if newV != 0 {
-				rlt.set[k] = newV
+				rlt.set.Set(k, newV)
 			} else if isInplace {
 				if deleteKeys == nil {
 					deleteKeys = make([]int64, 0, 1)
@@ -136,11 +147,12 @@ func (b *BitSet) Intersection(other *BitSet, inplace ...bool) *BitSet {
 			}
 			deleteKeys = append(deleteKeys, k)
 		}
-	}
+		return true
+	})
 
 	if isInplace && deleteKeys != nil {
 		for _, k := range deleteKeys {
-			delete(rlt.set, k)
+			rlt.set.Delete(k)
 		}
 	}
 	return rlt
@@ -152,19 +164,24 @@ func (b *BitSet) RemoveIntersection(other *BitSet, inplace ...bool) *BitSet {
 		isInplace = inplace[0]
 	}
 
+	iteratable, ok := b.set.(IDataIteratable)
+	if !ok {
+		panic("BitSet set is not IDataIteratable")
+	}
+
 	var rlt *BitSet
 	if isInplace {
 		rlt = b
 	} else {
-		rlt = NewBitSet(nil)
+		rlt = NewBitSetFromSource(iteratable.New())
 	}
 
 	inter := b.Intersection(other)
 	var deleteKeys []int64
-	for k, v := range b.set {
-		if interV, ok := inter.set[k]; ok {
+	iteratable.Iterate(func(k int64, v uint64) bool {
+		if interV, ok := inter.set.Get(k); ok {
 			newVal := v &^ interV
-			rlt.set[k] = newVal
+			rlt.set.Set(k, newVal)
 			if newVal == 0 && isInplace {
 				if deleteKeys == nil {
 					deleteKeys = make([]int64, 0, 1)
@@ -172,13 +189,14 @@ func (b *BitSet) RemoveIntersection(other *BitSet, inplace ...bool) *BitSet {
 				deleteKeys = append(deleteKeys, k)
 			}
 		} else if !isInplace {
-			rlt.set[k] = v
+			rlt.set.Set(k, v)
 		}
-	}
+		return true
+	})
 
 	if isInplace && deleteKeys != nil {
 		for _, k := range deleteKeys {
-			delete(b.set, k)
+			b.set.Delete(k)
 		}
 	}
 	return rlt
@@ -190,33 +208,48 @@ func (b *BitSet) Union(other *BitSet, inplace ...bool) *BitSet {
 		isInplace = inplace[0]
 	}
 
+	iteratable, ok := b.set.(IDataIteratable)
+	if !ok {
+		panic("BitSet set is not IDataIteratable")
+	}
+	otherIter, ok := other.set.(IDataIteratable)
+	if !ok {
+		panic("BitSet other set is not IDataIteratable")
+	}
+
 	var rlt *BitSet
 	if isInplace {
 		rlt = b
 	} else {
-		rlt = NewBitSet(nil)
+		rlt = NewBitSetFromSource(iteratable.New())
 	}
 
 	otherMap := other.set
-	for k, v := range b.set {
-		otherV := otherMap[k]
+	iteratable.Iterate(func(k int64, v uint64) bool {
+		otherV, _ := otherMap.Get(k)
 		if otherV != 0 {
-			rlt.set[k] = v | otherV
+			rlt.set.Set(k, v|otherV)
 		} else {
-			rlt.set[k] = v
+			rlt.set.Set(k, v)
 		}
-	}
+		return true
+	})
 
-	for k, v := range otherMap {
-		if _, ok := b.set[k]; !ok {
-			rlt.set[k] = v
+	otherIter.Iterate(func(k int64, v uint64) bool {
+		if _, ok := b.set.Get(k); !ok {
+			rlt.set.Set(k, v)
 		}
-	}
+		return true
+	})
 	return rlt
 }
 
 func (b *BitSet) Iterate(do func(int64) bool) {
-	for outIdx, v := range b.set {
+	iteratable, ok := b.set.(IDataIteratable)
+	if !ok {
+		panic("BitSet set is not IDataIteratable")
+	}
+	iteratable.Iterate(func(outIdx int64, v uint64) bool {
 		for {
 			innerIdx := bits.TrailingZeros64(v)
 			if innerIdx == 64 {
@@ -235,7 +268,8 @@ func (b *BitSet) Iterate(do func(int64) bool) {
 			}
 			v = v & ^(1 << innerIdx)
 		}
-	}
+		return true
+	})
 }
 
 func (b *BitSet) String() string {
@@ -245,7 +279,7 @@ func (b *BitSet) String() string {
 		nums = append(nums, v)
 		return true
 	})
-	return fmt.Sprintf("Raw Map: %s => nums: %v", setStr, nums)
+	return fmt.Sprintf("Raw data: %s => setted: %v", setStr, nums)
 }
 
 func key_2_idx(key int64) (outer int64, inner int) {
